@@ -10,7 +10,7 @@ from fastapi.responses import JSONResponse
 
 # ─── Configuration ───────────────────────────────────────────────────────────
 ALLOWED_ORIGIN = "https://dash-1drh4p.example.com"
-EMAIL = "23f2004415@ds.study.iitm.ac.in"
+EMAIL = "24f1000851@ds.study.iitm.ac.in"
 
 app = FastAPI(title="CORS-Aware Metrics API")
 
