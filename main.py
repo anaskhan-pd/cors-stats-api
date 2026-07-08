@@ -4,10 +4,16 @@ FastAPI service that computes descriptive statistics with strict per-origin CORS
 Also provides JWT verification endpoint.
 """
 
+import os
 import time
 import uuid
+from pathlib import Path
+from typing import List, Optional
+
 import jwt
-from fastapi import FastAPI, Request, Response
+import yaml
+from dotenv import dotenv_values
+from fastapi import FastAPI, Query, Request, Response
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 
@@ -65,7 +71,7 @@ async def cors_middleware(request: Request, call_next):
                 status_code=200,
                 headers={
                     "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
-                    "Access-Control-Allow-Methods": "GET, OPTIONS",
+                    "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
                     "Access-Control-Allow-Headers": "*",
                     "Access-Control-Max-Age": "600",
                 },
@@ -129,6 +135,128 @@ async def verify(body: TokenRequest):
             status_code=401,
             content={"valid": False},
         )
+
+
+# ─── 12-Factor Config Precedence ─────────────────────────────────────────────
+
+BASE_DIR = Path(__file__).resolve().parent
+
+DEFAULTS = {
+    "port": 8000,
+    "workers": 1,
+    "debug": False,
+    "log_level": "info",
+    "api_key": "default-secret-000",
+}
+
+# Key mapping from APP_* env var names to config keys
+ENV_KEY_MAP = {
+    "APP_PORT": "port",
+    "APP_WORKERS": "workers",
+    "APP_DEBUG": "debug",
+    "APP_LOG_LEVEL": "log_level",
+    "APP_API_KEY": "api_key",
+}
+
+# Alias: NUM_WORKERS -> workers (in .env layer)
+ENV_ALIASES = {
+    "NUM_WORKERS": "workers",
+}
+
+CONFIG_KEYS = {"port", "workers", "debug", "log_level", "api_key"}
+
+
+def coerce_bool(value) -> bool:
+    """Convert a value to boolean."""
+    if isinstance(value, bool):
+        return value
+    return str(value).strip().lower() in ("true", "1", "yes", "on")
+
+
+def coerce_int(value) -> int:
+    """Convert a value to integer."""
+    return int(value)
+
+
+def coerce_value(key: str, value):
+    """Apply type coercion based on key name."""
+    if key == "port" or key == "workers":
+        return coerce_int(value)
+    elif key == "debug":
+        return coerce_bool(value)
+    else:
+        return str(value)
+
+
+def load_yaml_config() -> dict:
+    """Load config.development.yaml (layer 2)."""
+    yaml_path = BASE_DIR / "config.development.yaml"
+    if yaml_path.exists():
+        with open(yaml_path) as f:
+            data = yaml.safe_load(f) or {}
+        return {k: v for k, v in data.items() if k in CONFIG_KEYS}
+    return {}
+
+
+def load_dotenv_config() -> dict:
+    """Load .env file (layer 3) with APP_* prefix mapping and aliases."""
+    env_path = BASE_DIR / ".env"
+    result = {}
+    if env_path.exists():
+        env_vals = dotenv_values(env_path)
+        for env_key, val in env_vals.items():
+            if env_key in ENV_KEY_MAP:
+                result[ENV_KEY_MAP[env_key]] = val
+            elif env_key in ENV_ALIASES:
+                result[ENV_ALIASES[env_key]] = val
+    return result
+
+
+def load_os_env_config() -> dict:
+    """Load OS environment variables with APP_* prefix (layer 4)."""
+    result = {}
+    for env_key, config_key in ENV_KEY_MAP.items():
+        val = os.environ.get(env_key)
+        if val is not None:
+            result[config_key] = val
+    return result
+
+
+@app.get("/effective-config")
+async def effective_config(request: Request, set: Optional[List[str]] = Query(None)):
+    # Layer 1: defaults
+    config = dict(DEFAULTS)
+
+    # Layer 2: config.development.yaml
+    yaml_config = load_yaml_config()
+    config.update(yaml_config)
+
+    # Layer 3: .env file
+    dotenv_config = load_dotenv_config()
+    config.update(dotenv_config)
+
+    # Layer 4: OS env vars (APP_* prefix)
+    os_env_config = load_os_env_config()
+    config.update(os_env_config)
+
+    # Layer 5 (highest): CLI overrides from ?set=key=value
+    if set:
+        for param in set:
+            if "=" in param:
+                key, value = param.split("=", 1)
+                key = key.strip()
+                if key in CONFIG_KEYS:
+                    config[key] = value
+
+    # Apply type coercion
+    for key in CONFIG_KEYS:
+        if key in config:
+            config[key] = coerce_value(key, config[key])
+
+    # Mask api_key
+    config["api_key"] = "****"
+
+    return config
 
 
 # ─── Health Check ────────────────────────────────────────────────────────────
