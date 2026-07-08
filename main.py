@@ -63,28 +63,47 @@ async def add_custom_headers(request: Request, call_next):
 @app.middleware("http")
 async def cors_middleware(request: Request, call_next):
     origin = request.headers.get("origin")
+    path = request.url.path
+
+    # Determine if this path requires strict CORS (only /stats)
+    strict_cors = path == "/stats"
 
     # Handle preflight OPTIONS requests
     if request.method == "OPTIONS":
-        if origin == ALLOWED_ORIGIN:
+        if strict_cors:
+            if origin == ALLOWED_ORIGIN:
+                return Response(
+                    status_code=200,
+                    headers={
+                        "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
+                        "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
+                        "Access-Control-Allow-Headers": "*",
+                        "Access-Control-Max-Age": "600",
+                    },
+                )
+            else:
+                # Reject preflight from non-allowed origins: no ACAO header
+                return Response(status_code=200)
+        else:
+            # Non-strict paths: allow any origin
             return Response(
                 status_code=200,
                 headers={
-                    "Access-Control-Allow-Origin": ALLOWED_ORIGIN,
+                    "Access-Control-Allow-Origin": origin or "*",
                     "Access-Control-Allow-Methods": "GET, POST, OPTIONS",
                     "Access-Control-Allow-Headers": "*",
                     "Access-Control-Max-Age": "600",
                 },
             )
-        else:
-            # Reject preflight from non-allowed origins: no ACAO header
-            return Response(status_code=200)
 
     # Handle normal requests
     response = await call_next(request)
 
-    if origin == ALLOWED_ORIGIN:
-        response.headers["Access-Control-Allow-Origin"] = ALLOWED_ORIGIN
+    if strict_cors:
+        if origin == ALLOWED_ORIGIN:
+            response.headers["Access-Control-Allow-Origin"] = ALLOWED_ORIGIN
+    else:
+        response.headers["Access-Control-Allow-Origin"] = origin or "*"
 
     return response
 
